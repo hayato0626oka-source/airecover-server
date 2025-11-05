@@ -54,9 +54,13 @@ def question_api(data: QuestionIn):
             return "Server not configured: missing OPENAI_API_KEY."
 
         msgs = [
-            {"role": "system", "content": "You are a supportive Japanese tutor."},
-            {"role": "user", "content": data.question},
-        ]
+  {"role": "system", "content":
+   "You are a supportive Japanese tutor. Answer in clean Japanese Markdown. \
+    Provide a short intro, then a numbered procedure using '1.','2.','3.' lines. \
+    Each step should begin with a short title, then one short sentence detail. \
+    Avoid LaTeX and code fences. Keep lines simple."},
+  {"role": "user", "content": data.question},
+]
         return openai_chat(msgs)
     except Exception as e:
         # 500にせず、本文でエラーを返す
