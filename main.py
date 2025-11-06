@@ -9,16 +9,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-
-# ====== 環境変数 ======
-PROVIDER = os.getenv("PROVIDER", "openai")         # "openai" / "groq" / "openrouter"
+# =========================
+# 環境変数
+# =========================
+PROVIDER = os.getenv("PROVIDER", "openai")        # "openai" / "groq" / "openrouter"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-MODEL = os.getenv("MODEL", "gpt-4o-mini")          # 任意のデフォルト
-USE_FAKE = os.getenv("USE_FAKE", "0")              # "1" でダミー応答
+MODEL = os.getenv("MODEL", "gpt-4o-mini")
+USE_FAKE = os.getenv("USE_FAKE", "0")             # "1" でダミー応答
 
-# ====== FastAPI ======
+# =========================
+# FastAPI
+# =========================
 app = FastAPI(title="homeroom-server", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -26,7 +29,9 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
-# ====== Pydantic Models ======
+# =========================
+# 入出力モデル
+# =========================
 class QuestionIn(BaseModel):
     question: str
     teacher_key: Optional[str] = None
@@ -48,28 +53,25 @@ class TodoCoachIn(BaseModel):
     teacher_key: Optional[str] = None
     student_nick: Optional[str] = None
 
-
-# ====== 担任プロファイル ======
+# =========================
+# 担任プロファイル
+# =========================
 PERSONA = {
-    # 画像：咲（クール系お姉さん）
     "saki": {
         "name": "咲",
         "style": "クールでロジカル。余計な絵文字なし、語尾は端的。相手を見下さないがキレ味あり。",
         "greeting": "要点から行くね。"
     },
-    # 画像：ナツキ（チャラいお兄さん）
     "natsuki": {
         "name": "ナツキ",
         "style": "軽快でフレンドリー。タメ口9割、ほどよくノリ良い相づち。短文多め。",
         "greeting": "よっ、任せろ。"
     },
-    # 画像：詩織（ふわふわ系お姉さん）
     "shiori": {
         "name": "詩織",
         "style": "柔らかく共感的。語尾はやさしめ。落ち着くテンポで短く要点。",
         "greeting": "まずは深呼吸しよ。"
     },
-    # 画像：悠真（理知的な優男）
     "yuuma": {
         "name": "悠真",
         "style": "丁寧で知的。穏やかな肯定から入り、具体の一歩を促す。冗長禁止。",
@@ -78,7 +80,7 @@ PERSONA = {
 }
 PERSONA_KEYS = set(PERSONA.keys())
 
-# アプリ側キー → サーバ側キーのエイリアス
+# アプリ側キー → サーバ側キー
 KEY_ALIAS = {
     "cool_female": "saki",
     "yankee": "natsuki",
@@ -98,7 +100,6 @@ def resolve_teacher_key(raw_key: Optional[str], message: Optional[str]) -> str:
     """
     k = (raw_key or "").strip().lower()
     k = KEY_ALIAS.get(k, k)
-
     if message:
         m = PERSONA_TAG_RE.match(message)
         if m:
@@ -106,27 +107,19 @@ def resolve_teacher_key(raw_key: Optional[str], message: Optional[str]) -> str:
             tag = KEY_ALIAS.get(tag, tag)
             if tag in PERSONA_KEYS:
                 return tag
-
     return k if k in PERSONA_KEYS else "saki"
 
-def strip_persona_tag(s: str) -> str:
+def strip_persona_tag(s: Optional[str]) -> str:
     return PERSONA_TAG_RE.sub("", s or "", count=1)
 
-
-# ====== LLM 呼び出し ======
+# =========================
+# LLM 呼び出し
+# =========================
 def chat_api(msgs: list) -> str:
-    """
-    各プロバイダへ最小構成で問い合わせ。
-    失敗したら例外を投げる（上位で握る）。
-    """
     if PROVIDER == "openai" and OPENAI_API_KEY:
         url = "https://api.openai.com/v1/chat/completions"
         headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-        payload = {
-            "model": MODEL,
-            "messages": msgs,
-            "temperature": 0.7,
-        }
+        payload = {"model": MODEL, "messages": msgs, "temperature": 0.7}
         r = requests.post(url, headers=headers, json=payload, timeout=60)
         r.raise_for_status()
         j = r.json()
@@ -154,11 +147,12 @@ def chat_api(msgs: list) -> str:
         j = r.json()
         return j["choices"][0]["message"]["content"]
 
-    # プロバイダ未設定時は簡易応答でフォールバック
+    # プロバイダ未設定時は簡易応答
     return "（サーバ設定が未完了のため、簡易応答です）"
 
-
-# ====== 共通：出力クレンジング ======
+# =========================
+# ユーティリティ
+# =========================
 def clean_out(s: str) -> str:
     t = (s or "").strip()
     if len(t) >= 2 and (
@@ -171,8 +165,6 @@ def clean_out(s: str) -> str:
     t = t.replace("SUGGEST:", "").replace("Suggest:", "")
     return t.strip()
 
-
-# ====== プロンプト組立 ======
 def persona_prompt(final_key: str, student_nick: Optional[str]) -> str:
     p = PERSONA.get(final_key, PERSONA["saki"])
     nick = student_nick or "あなた"
@@ -187,14 +179,12 @@ def persona_prompt(final_key: str, student_nick: Optional[str]) -> str:
     )
 
 def tutor_prompt(final_key: str, student_nick: Optional[str]) -> str:
-    # person化チューター（必要に応じて性格差分）
     base = (
         "You are a supportive Japanese tutor. "
         "Answer in clean Japanese Markdown for iOS display. "
         "Start with a one-line summary. Then provide a numbered procedure (3–6 steps). "
         "No LaTeX or code fences. Equations plain like 2x+3=7 → 2x=4 → x=2."
     )
-    # 最低限、人格選択の影響を与える（口調微差）
     if final_key == "saki":
         return base + " Tone: concise, logical, no emojis."
     if final_key == "natsuki":
@@ -205,25 +195,29 @@ def tutor_prompt(final_key: str, student_nick: Optional[str]) -> str:
         return base + " Tone: polite and calm."
     return base
 
-
-# ====== ルート/ヘルス ======
+# =========================
+# ルート/ヘルス
+# =========================
 @app.get("/")
 def root():
-    return {"ok": True, "provider": PROVIDER, "model": MODEL, "use_fake": USE_FAKE}
+    return {"ok": True, "service": "homeroom-server", "use_fake": USE_FAKE, "provider": PROVIDER, "model": MODEL}
 
-
-# ====== エンドポイント ======
+# =========================
+# エンドポイント
+# =========================
 @app.post("/consult")
 def consult_api(data: ConsultIn):
     try:
-        # 最終キーを確定し、タグは本文から除去
         final_key = resolve_teacher_key(data.teacher_key, data.message)
         clean_msg = strip_persona_tag(data.message)
 
-        # ダミー応答モード
+        # デバッグログ（RenderのLogsで確認できる）
+        print(f"[consult] teacher_key(raw)={data.teacher_key} -> final={final_key}")
+        print(f"[consult] msg_head={(clean_msg or '')[:60]}")
+
         if USE_FAKE == "1":
             who = PERSONA[final_key]["name"]
-            return {"reply": f"{who}：それ、まずは一息つこ。次にどうしたい？"}
+            return {"reply": f"[{final_key.upper()}] {who}：それ、まずは一息つこ。次にどうしたい？"}
 
         system = persona_prompt(final_key, data.student_nick)
         msgs = [
@@ -231,11 +225,10 @@ def consult_api(data: ConsultIn):
             {"role": "user", "content": clean_msg},
         ]
         out = chat_api(msgs)
-        return {"reply": clean_out(out)}
+        return {"reply": f"[{final_key.upper()}] {clean_out(out)}"}
     except Exception:
         print("TRACEBACK:\n", traceback.format_exc())
         return {"reply": "Unhandled server exception."}
-
 
 @app.post("/question")
 def question_api(data: QuestionIn):
@@ -244,7 +237,7 @@ def question_api(data: QuestionIn):
 
         if USE_FAKE == "1":
             who = PERSONA[final_key]["name"]
-            return {"reply": f"{who}：要点だけで解説するね。まず与件の式を書き出そう。"}
+            return {"reply": f"[{final_key.upper()}] {who}：要点だけで解説するね。まず与件の式を書き出そう。"}
 
         system = tutor_prompt(final_key, data.student_nick)
         msgs = [
@@ -252,23 +245,19 @@ def question_api(data: QuestionIn):
             {"role": "user", "content": data.question},
         ]
         out = chat_api(msgs)
-        return {"reply": clean_out(out)}
+        return {"reply": f"[{final_key.upper()}] {clean_out(out)}"}
     except Exception:
         print("TRACEBACK:\n", traceback.format_exc())
         return {"reply": "Unhandled server exception."}
 
-
 @app.post("/todo/coach")
 def todo_coach_api(data: TodoCoachIn):
-    """
-    タスク配列から“今日の一言”を短文で返す。
-    """
     try:
         final_key = resolve_teacher_key(data.teacher_key, None)
 
         if USE_FAKE == "1":
             who = PERSONA[final_key]["name"]
-            return {"reply": f"{who}：まずは1分だけ手を付けよ。最初の一歩が一番軽い。"}
+            return {"reply": f"[{final_key.upper()}] {who}：まずは1分だけ手を付けよ。最初の一歩が一番軽い。"}
 
         pending = [t for t in data.tasks if not t.done]
         count = len(pending)
@@ -283,7 +272,7 @@ def todo_coach_api(data: TodoCoachIn):
             {"role": "user", "content": user},
         ]
         out = chat_api(msgs)
-        return {"reply": clean_out(out)}
+        return {"reply": f"[{final_key.upper()}] {clean_out(out)}"}
     except Exception:
         print("TRACEBACK:\n", traceback.format_exc())
         return {"reply": "Unhandled server exception."}
