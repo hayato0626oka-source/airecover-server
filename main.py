@@ -1,6 +1,5 @@
 import os
 import re
-import time
 import traceback
 from typing import List, Optional
 
@@ -54,7 +53,7 @@ class TodoCoachIn(BaseModel):
     student_nick: Optional[str] = None
 
 # =========================
-# 担任プロファイル
+# 担任プロファイル（サーバ公式キー）
 # =========================
 PERSONA = {
     "saki": {
@@ -77,25 +76,37 @@ PERSONA = {
         "style": "丁寧で知的。穏やかな肯定から入り、具体の一歩を促す。冗長禁止。",
         "greeting": "状況を一緒に整理しよう。"
     },
+    # 新規：ひなた / 陽也
+    "hinata": {
+        "name": "ひなた",
+        "style": "明るく素直で前向き。語尾はやわらか、テンポ速め。背中を軽く押す短文。",
+        "greeting": "やっほー、まずは深呼吸しよ！"
+    },
+    "haruya": {
+        "name": "陽也",
+        "style": "元気でポジティブ。ラフな口調だが率直で具体。勢いだけでなく要点は外さない。",
+        "greeting": "よし、今から一緒に動こう。"
+    },
 }
 PERSONA_KEYS = set(PERSONA.keys())
 
-# アプリ側キー → サーバ側キー
+# アプリ側キー → サーバ側キー（エイリアス）
 KEY_ALIAS = {
     "cool_female": "saki",
     "yankee": "natsuki",
     "gentle_sister": "shiori",
     "gentle_brother": "yuuma",
-    "energetic_male": "yuuma",
-    "little_sister": "shiori",
+    "energetic_male": "haruya",   # ← 陽也に割当
+    "little_sister": "hinata",    # ← ひなたに割当
 }
 
+# 先頭タグ [persona:xxx] を読む
 PERSONA_TAG_RE = re.compile(r"^\s*\[persona:([a-zA-Z0-9_]+)\]\s*")
 
 def resolve_teacher_key(raw_key: Optional[str], message: Optional[str]) -> str:
     """
     1) teacher_key を正規化（別名→公式キー）
-    2) メッセージ先頭の [persona:xxx] タグがあれば優先
+    2) メッセージ先頭の [persona:xxx] タグがあれば最優先
     3) 不正キーは 'saki' にフォールバック
     """
     k = (raw_key or "").strip().lower()
@@ -193,6 +204,10 @@ def tutor_prompt(final_key: str, student_nick: Optional[str]) -> str:
         return base + " Tone: warm and gentle."
     if final_key == "yuuma":
         return base + " Tone: polite and calm."
+    if final_key == "hinata":
+        return base + " Tone: bright, friendly, and encouraging."
+    if final_key == "haruya":
+        return base + " Tone: energetic, direct, and practical."
     return base
 
 # =========================
@@ -200,7 +215,14 @@ def tutor_prompt(final_key: str, student_nick: Optional[str]) -> str:
 # =========================
 @app.get("/")
 def root():
-    return {"ok": True, "service": "homeroom-server", "use_fake": USE_FAKE, "provider": PROVIDER, "model": MODEL}
+    return {
+        "ok": True,
+        "service": "homeroom-server",
+        "use_fake": USE_FAKE,
+        "provider": PROVIDER,
+        "model": MODEL,
+        "personas": sorted(list(PERSONA_KEYS)),
+    }
 
 # =========================
 # エンドポイント
@@ -211,7 +233,7 @@ def consult_api(data: ConsultIn):
         final_key = resolve_teacher_key(data.teacher_key, data.message)
         clean_msg = strip_persona_tag(data.message)
 
-        # デバッグログ（RenderのLogsで確認できる）
+        # Render Logs で確認しやすく
         print(f"[consult] teacher_key(raw)={data.teacher_key} -> final={final_key}")
         print(f"[consult] msg_head={(clean_msg or '')[:60]}")
 
