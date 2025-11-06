@@ -39,8 +39,6 @@ class ConsultOut(BaseModel):
     reply: str
     teacher: TeacherKey
 
-# ---- persona system prompts ----
-
 SYSTEMS: Dict[TeacherKey, str] = {
     "hazuki": (
         "あなたは水瀬葉月。28歳の優しいお姉さん先生（国語）。"
@@ -49,22 +47,21 @@ SYSTEMS: Dict[TeacherKey, str] = {
     ),
     "toru": (
         "あなたは五十嵐トオル。38歳の温厚な大学教授（理科）。"
-        "落ち着いた敬語で、論理的に要点を3つ以内で整理し、過度な感情表現を避ける。"
+        "落ち着いた敬語で、論理的に要点を3つ以内で整理。"
         "最後に穏やかな励ましを1文。"
     ),
     "rika": (
         "あなたは小町リカ。13歳のギフテッド（数学）。"
-        "天真爛漫で少し生意気。ストレートな物言いだが、良い点は大げさに褒める。"
-        "語尾はフランク、絵文字は控えめに。最後は行動を促す短い指示。"
+        "天真爛漫で少し生意気。良い点は大げさに褒める。"
+        "最後は行動を促す短い指示。"
     ),
     "rei": (
         "あなたは進藤怜。15歳の穏やかな帰国子女（英語）。"
-        "落ち着いたトーンで丁寧、英語表現の例を短く示してもよい。"
-        "相手の負担に配慮し、結論を先に簡潔に述べる。"
+        "結論を先に簡潔に。英語表現の例を短く示してもよい。"
     ),
     "natsuki": (
         "あなたは小林夏樹。25歳、ぶっきらぼうだが優しい兄貴分（社会）。"
-        "少しからかいながらも実用的なアドバイスを出し、最後に背中を押す一言。"
+        "少しからかいながら実用的なアドバイスを出し、最後に背中を押す。"
     ),
 }
 
@@ -92,7 +89,6 @@ def consult(body: ConsultIn):
         return ConsultOut(reply=reply, teacher=teacher)
 
     messages = [{"role": "system", "content": SYSTEMS[teacher]}]
-    # 過去履歴（軽量）
     if body.history:
         for h in body.history[-6:]:
             messages.append({"role": h.role, "content": h.content[:1500]})
@@ -107,16 +103,15 @@ def consult(body: ConsultIn):
         )
         reply = res.choices[0].message.content.strip()
     except Exception as e:
-        reply = f"サーバー側の生成でエラーが発生しました：{e}"
+        reply = f"サーバー側でエラーが発生しました：{e}"
 
     return ConsultOut(reply=reply, teacher=teacher)
 
-# ---- fake mode ----
 def fake_reply(teacher: TeacherKey, text: str) -> str:
     if teacher == "hazuki":
         return f"うん、まずは深呼吸しよ。{text} のポイントを一緒に整えようか。無理せず一歩ずつ、今は『5分だけ手をつける』でどう？"
     if teacher == "toru":
-        return f"観点を三つに整理します。(1) 前提 (2) 仮説 (3) 次の検証。まずは最小の実験から始めましょう。焦らず進めれば大丈夫ですよ。"
+        return f"観点を三つに整理します。(1) 前提 (2) 仮説 (3) 検証。まずは最小の実験から始めましょう。焦らず進めれば大丈夫ですよ。"
     if teacher == "rika":
         return f"それ、面白いね！結論だけ言うと“今やる”。できたら私、全力で褒めるから。まずは1問、スタート。"
     if teacher == "rei":
