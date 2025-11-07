@@ -1,4 +1,4 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.8.2
-openai==1.43.0
+fastapi==0.110.3
+uvicorn==0.30.6         # ← 標準extras抜きにして依存を軽量化
+pydantic==2.7.4
+openai==1.30.1
