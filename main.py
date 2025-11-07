@@ -1,4 +1,4 @@
-# main.py (FastAPI 1.10対応 + 同期OpenAI + alias対応) v1.2.0
+# main.py (FastAPI 1.10対応 + 同期OpenAI + alias対応) v1.2.1
 from __future__ import annotations
 import os, time
 from typing import List, Optional, Dict, Any
@@ -17,11 +17,11 @@ except Exception:
 # -----------------------------------------------------------------------------
 # App setup
 # -----------------------------------------------------------------------------
-app = FastAPI(title="homeroom-api", version="1.2.0")
+app = FastAPI(title="homeroom-api", version="1.2.1")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本番は絞ってOK
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +72,11 @@ def root():
 
 @app.get("/healthz")
 def healthz():
+    return {"status": "ok"}
+
+# 互換のため /health も用意（クライアントがこちらを叩いている想定）
+@app.get("/health")
+def health():
     return {"status": "ok"}
 
 @app.get("/teachers", response_model=List[Teacher])
