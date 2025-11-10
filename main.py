@@ -1,4 +1,4 @@
-# main.py — FastAPI（相談タブだけ“人間っぽい間”強化版）
+# main.py — FastAPI（相談タブだけ超短文・人間っぽい間）
 
 import os
 from typing import List, Optional, Literal, Dict, Any, Union
@@ -6,9 +6,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
+import re
 
 APP_NAME = "ai-recover"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"  # ← 相談タブの短文＆間 修正版
 
 # ===== OpenAI client =====
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -38,8 +39,7 @@ class LearnIn(BaseModel):
     question: str
     imageBase64: Optional[str] = None
     imageMime: Optional[str] = None
-    # 任意：先生ID（省略可）
-    teacher_id: Optional[TeacherID] = None
+    teacher_id: Optional[TeacherID] = None  # 学習タブは据え置き（任意）
 
 class LearnOut(BaseModel):
     steps: List[str]
@@ -52,50 +52,29 @@ class CoachIn(BaseModel):
 class CoachOut(BaseModel):
     tip: str
 
-# ---------- Persona / Style ----------
+# ---------- Personas ----------
 def teacher_persona(tid: TeacherID) -> str:
     table: Dict[TeacherID, str] = {
-        "toru": (
-            "あなたは38歳の理科の大学教授・五十嵐トオル。温厚で落ち着いた敬語。"
-            "観察→仮説→検証の順で筋道立てて説明する。比喩は控えめ。"
-        ),
-        "hazuki": (
-            "あなたは28歳の国語の先生・水瀬葉月。やさしく親身な口調。"
-            "要点→根拠→結論の型で導く。語尾は柔らかく、断定は優しめ。"
-        ),
-        "rika": (
-            "あなたは13歳・IQ200の天才、小町リカ。テンポが速く少しタメ口。"
-            "言い切りで核心を突き、できた所は大きく褒める。"
-        ),
-        "rei": (
-            "あなたは15歳・IQ190の英語の先生、進藤怜。穏やかな丁寧語。"
-            "落ち着いた励ましを添えつつ、段階的に教える。"
-        ),
-        "natsuki": (
-            "あなたは25歳の社会の先生・小林夏樹。ぶっきらぼうだが面倒見がよい。"
-            "因果と比較で要点をズバッと示す。"
-        ),
+        "toru":   "あなたは38歳の理科の大学教授・五十嵐トオル。温厚で落ち着いた敬語。観察→仮説→検証で筋道立てる。",
+        "hazuki": "あなたは28歳の国語の先生・水瀬葉月。やさしく親身。要点→根拠→結論で導く。語尾は柔らかめ。",
+        "rika":   "あなたは13歳・IQ200の天才、小町リカ。テンポ速め、少しタメ口。できた所はよく褒める。",
+        "rei":    "あなたは15歳・IQ190の英語の先生、進藤怜。穏やかな丁寧語。安心感のある励ましを添える。",
+        "natsuki":"あなたは25歳の社会の先生・小林夏樹。ぶっきらぼうだが面倒見が良い。因果と比較が得意。",
     }
     return table[tid]
 
 def teacher_style_rules(tid: TeacherID) -> str:
     styles: Dict[TeacherID, str] = {
-        "hazuki": "語尾例:『〜だよ』『〜してみようね』。優しく丁寧、冗談は最小限。",
-        "toru":   "敬語で論理的。接続語『まず』『次に』『だから』を適度に使う。",
-        "rika":   "テンポ速めのタメ口。短文中心。相槌を1回入れる(例:『いいね！』)。",
-        "rei":    "落ち着いた丁寧語。安心感のある励ましを最後に一言添える。",
-        "natsuki":"やや砕けた口調。結論先出しOK。語尾『〜だな』『〜しよう』を時々使う。",
+        "hazuki": "語尾『〜だよ』『〜してみようね』。やさしく短く。",
+        "toru":   "敬語で簡潔。『まず/次に』を最小限に。",
+        "rika":   "短文・タメ口・テンポ早め。相槌1回（例『いいね！』）。",
+        "rei":    "落ち着いた丁寧語。安心させる一言を最後に短く。",
+        "natsuki":"砕けた口調。結論先出し。語尾『〜だな』『〜しよう』を時々。",
     }
     return styles[tid]
 
 def subject_hint(subj: SubjectID) -> str:
-    m = {
-        "国語":"国語","kokugo":"国語",
-        "数学":"数学","suugaku":"数学",
-        "英語":"英語","eigo":"英語",
-        "理科":"理科","rika":"理科",
-        "社会":"社会","shakai":"社会",
-    }
+    m = {"国語":"国語","kokugo":"国語","数学":"数学","suugaku":"数学","英語":"英語","eigo":"英語","理科":"理科","rika":"理科","社会":"社会","shakai":"社会"}
     return m.get(subj, "学習")
 
 def default_teacher_for(subj: SubjectID) -> TeacherID:
@@ -113,14 +92,14 @@ def require_client():
     if client is None:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not set on the server")
 
-def chat_once(model: str, system: str, user: Any) -> str:
+def chat_once(model: str, system: str, user: Any, temperature: float = 0.6) -> str:
     require_client()
     try:
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": user}],
-            temperature=0.6,
+            temperature=temperature,
         )
         content = resp.choices[0].message.content or ""
         if not content.strip():
@@ -131,7 +110,16 @@ def chat_once(model: str, system: str, user: Any) -> str:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"upstream_error: {e}")
 
-# ---------- tiny utils ----------
+# ---------- Meta ----------
+@app.get("/", tags=["meta"])
+def root():
+    return {"service": APP_NAME, "version": APP_VERSION, "docs": "/docs", "status": "ok"}
+
+@app.get("/health", tags=["meta"])
+def health():
+    return {"ok": True}
+
+# ---------- consult（ここだけ短文化＋“間”） ----------
 def _pick_str(d: Dict[str, Any], keys: List[str]) -> Optional[str]:
     for k in keys:
         v = d.get(k)
@@ -145,13 +133,7 @@ def _pick_teacher(d: Dict[str, Any]) -> TeacherID:
         s = raw.strip().lower()
         if s in ["hazuki","rei","rika","toru","natsuki"]:
             return s  # type: ignore
-        jp_map = {
-            "水瀬葉月":"hazuki","葉月":"hazuki",
-            "進藤怜":"rei","怜":"rei",
-            "小町リカ":"rika","リカ":"rika",
-            "五十嵐トオル":"toru","トオル":"toru",
-            "小林夏樹":"natsuki","夏樹":"natsuki",
-        }
+        jp_map = {"水瀬葉月":"hazuki","葉月":"hazuki","進藤怜":"rei","怜":"rei","小町リカ":"rika","リカ":"rika","五十嵐トオル":"toru","トオル":"toru","小林夏樹":"natsuki","夏樹":"natsuki"}
         for k,v in jp_map.items():
             if s == k.lower():
                 return v  # type: ignore
@@ -161,73 +143,59 @@ def _pick_teacher(d: Dict[str, Any]) -> TeacherID:
             return order[raw]  # type: ignore
     return "hazuki"
 
-# ===== Meta =====
-@app.get("/", tags=["meta"])
-def root():
-    return {"service": APP_NAME, "version": APP_VERSION, "docs": "/docs", "status": "ok"}
+# 先生ごとの“軽い入り”と“短い締め”
+_OPENERS: Dict[TeacherID, str] = {
+    "hazuki": "…そっか。",
+    "toru":   "なるほど。",
+    "rika":   "ん、分かった！",
+    "rei":    "…うん。",
+    "natsuki":"…おう。",
+}
+_CLOSERS: Dict[TeacherID, str] = {
+    "hazuki": "無理しないでね。",
+    "toru":   "詳しくは一つずつ見ていこう。",
+    "rika":   "だいじょうぶ。私がついてる。",
+    "rei":    "大丈夫、一緒に整えていこう。",
+    "natsuki":"よし、ここからだな。",
+}
 
-@app.get("/health", tags=["meta"])
-def health():
-    return {"ok": True}
+# LLM 指示：2文以内＋最後に短い問い
+def _consult_system(t: TeacherID) -> str:
+    return (
+        teacher_persona(t) + "\n" +
+        teacher_style_rules(t) + "\n" +
+        "あなたはチャット相談の相手。出力は以下を厳守：\n"
+        "・最大全角200文字・2文以内。\n"
+        "・必要なら文頭にごく短い相槌（1語〜5語）。\n"
+        "・最後は短い質問を1つだけ返す。\n"
+        "・箇条書き/長文/要約/結論の羅列は禁止。\n"
+        "・同じ内容の繰り返しは禁止。\n"
+        "・丁寧すぎる定型文は避け、自然な口語で。\n"
+    )
 
-# ===== consult（ここだけ“間”を入れる） =====
-def _interjection(t: TeacherID) -> str:
-    return {
-        "hazuki": "うん、",
-        "toru": "なるほど、",
-        "rika": "おっ、",
-        "rei": "大丈夫、",
-        "natsuki": "よし、",
-    }[t]
-
-def _shorten(s: str, limit: int = 120) -> str:
-    # マルチバイト安全に末尾を省略
-    if len(s) <= limit:
-        return s
-    return s[:limit].rstrip() + "…"
-
-def _first_sentences(text: str, n: int = 3) -> List[str]:
-    # 句点・改行でざっくり文切り
-    raw = text.replace("\r", "")
-    splitter = ["。", "！", "？", "\n"]
-    out: List[str] = []
-    buf = ""
-    for ch in raw:
-        buf += ch
-        if ch in splitter:
-            seg = buf.strip()
-            if seg:
-                out.append(seg)
-            buf = ""
-        if len(out) >= n:
-            break
-    if len(out) < n and buf.strip():
-        out.append(buf.strip())
-    return out[:n]
-
-def _humanize_consult(raw: str, teacher: TeacherID) -> str:
-    # 3行構成：相槌 / 受け止め1文 / 短い質問（相談タブ専用）
-    lines = _first_sentences(raw, 2)  # 受け止めは最大2文拾う
-    ack = _interjection(teacher) + "わかったよ。"
-    reflect = _shorten(lines[0] if lines else "今の気持ち、ちゃんと受け止めた。")
-    # 質問テンプレ（先生ごとに軽く差し替え）
-    ask_map = {
-        "hazuki": "いま一番つらいポイントを一つだけ教えてくれる？",
-        "toru":   "具体的に一番の要因はどれでしょう？",
-        "rika":   "で、いちばん困ってるのって何？",
-        "rei":    "まず一番の悩みを一つだけ挙げてみましょうか？",
-        "natsuki":"率直に、一番の原因は何だ？",
-    }
-    ask = ask_map[teacher]
-    # 相槌+受け止め+問い の三拍子。各行120字制限。
-    out_lines = [_shorten(ack), _shorten(reflect), _shorten(ask)]
-    return "\n\n".join(out_lines)
+# 念のためのサーバー側短縮（LLMの暴走止め）
+def _shrink_two_sentences(s: str, limit: int = 200) -> str:
+    # 改行→スペース
+    s = re.sub(r"[ \t]*\n[ \t]*", " ", s.strip())
+    # 箇条書き接頭辞を除去
+    s = re.sub(r"^[\-\•\・\*]\s*", "", s, flags=re.MULTILINE)
+    # 文スプリット（。！？）
+    parts = re.split(r"(?<=[。.!?！？])\s*", s)
+    parts = [p for p in parts if p]
+    if len(parts) > 2:
+        s = parts[0] + (" " if not parts[0].endswith(("。","!","?","！","？")) else "") + parts[1]
+    # 文字数制限
+    if len(s) > limit:
+        s = s[:limit-1] + "…"
+    # 末尾に過剰な定型を置かない
+    s = re.sub(r"(よろしくお願いします|ご安心ください).*?$", "", s)
+    return s.strip()
 
 @app.post("/consult", tags=["ai"])
 async def consult(request: Request):
     """
-    相談API（学習タブには影響させない）。
-    出力は “短い相槌 → 受け止め1文 → 短い質問” の3行で返す。
+    相談API：先生ごとの口調で『短い相槌→一言→短い質問』に強制。
+    レスポンス形式は従来通り { reply: string } のみ（フロント改修不要）。
     """
     try:
         payload: Dict[str, Any] = await request.json()
@@ -239,17 +207,22 @@ async def consult(request: Request):
         raise HTTPException(status_code=422, detail="text is required")
     teacher: TeacherID = _pick_teacher(payload)
 
-    system = (
-        teacher_persona(teacher) + "\n" +
-        teacher_style_rules(teacher) + "\n" +
-        "あなたは“相談役”。まず短い相槌で受け止め、その後に要約を1文、最後に質問を1つだけ投げる。"
-        "箇条書きは不要。3文以内・1文120字以内。長い段落は禁止。"
-    )
-    raw = chat_once(MODEL_CONSULT, system, text)
-    reply = _humanize_consult(raw, teacher)
-    return {"reply": reply}
+    opener = _OPENERS.get(teacher, "")
+    closer = _CLOSERS.get(teacher, "")
 
-# ===== question（学習タブ：既存の5〜7ステップ。相談の“間”は影響しない） =====
+    system = _consult_system(teacher)
+    raw = chat_once(MODEL_CONSULT, system, text, temperature=0.7)
+    body = _shrink_two_sentences(raw)
+
+    # “相槌”と“軽い締め”を足す（重複しないように）
+    if opener and not body.lstrip().startswith(opener):
+        body = f"{opener} {body}"
+    if closer and not body.endswith(("。","!","！","？","?")):
+        body = f"{body} {closer}"
+
+    return {"reply": body}
+
+# ---------- question（学習タブ：据え置き・口調だけ反映） ----------
 @app.post("/question", response_model=LearnOut, tags=["ai"])
 def question(inb: LearnIn):
     subj = subject_hint(inb.subject)
@@ -258,12 +231,10 @@ def question(inb: LearnIn):
     system = (
         teacher_persona(teacher) + "\n" +
         teacher_style_rules(teacher) + "\n" +
-        "あなたは学習コーチ。以下の厳密な出力形式に従う。\n"
-        "【出力形式】\n"
+        "あなたは学習コーチ。出力は厳密に：\n"
         "・日本語で5〜7ステップ。\n"
-        "・各ステップは最大70字、1行に収める。\n"
-        "・前置き/後書き/まとめは不要。手順だけを列挙。\n"
-        "・各行の先頭に 1〜7 の番号を付けてもよい。"
+        "・各ステップは最大70字、1行のみ。\n"
+        "・前置き/まとめは不要。手順だけを列挙。"
     )
 
     if inb.imageBase64 and inb.imageMime:
@@ -276,7 +247,7 @@ def question(inb: LearnIn):
 
     text = chat_once(MODEL_LEARN, system, user)
 
-    # 行→steps への整形（番号や「ステップn」を除去）
+    # 行整形（番号/『ステップ』等を取り除く）
     lines = [s.strip(" ・-　").strip() for s in text.splitlines() if s.strip()]
     steps: List[str] = []
     for s in lines:
@@ -293,19 +264,19 @@ def question(inb: LearnIn):
         steps = steps[:4] + [" / ".join(steps[4:])]
     return LearnOut(steps=steps)
 
-# ===== todo/coach =====
+# ---------- todo/coach（据え置き） ----------
 @app.post("/todo/coach", response_model=CoachOut, tags=["ai"])
 def todo_coach(inb: CoachIn):
     persona = teacher_persona(inb.teacher_id)
     system = (
         f"{persona}\n"
         "ToDoとルーティンから今日のフォーカスを1〜2文で提案。"
-        "言い切りで前向きに、実行順や所要時間の目安を入れてもよい。"
-        "\n" + teacher_style_rules(inb.teacher_id)
+        "言い切りで前向きに、実行順や所要時間の目安を入れてもよい。\n" +
+        teacher_style_rules(inb.teacher_id)
     )
     user = (
         "今日のToDo: " + ("、".join(inb.tasks_today) if inb.tasks_today else "なし") + "\n" +
         "ルーティン: " + ("、".join(inb.routines) if inb.routines else "なし")
     )
     tip = chat_once(MODEL_CONSULT, system, user)
-    return CoachOut(tip=tip)
+    return CoachOut(tip=_shrink_two_sentences(tip, limit=180))
